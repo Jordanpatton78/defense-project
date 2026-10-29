@@ -1,99 +1,75 @@
-# AI-engineering-base
+# Tagup Defense Project
 
-A set of reusable building blocks for AI and ML projects. Nothing here is tied to one dataset, model, or business problem. The code covers the parts most AI projects end up rebuilding: loading data, checking its quality, labeling it, training or running a model, measuring results, detecting anomalies, retrieving context for a language model, and reporting what happened. Point it at a new dataset with a config file and most of it works unchanged.
+Ranks the severity of risk descriptions on a 0-10 scale. A CSV in Google Cloud Storage goes in, and each row comes back with a `severity_score` produced by a small open-source language model reading that row's `description` column.
 
-## What it does
+This is a copy of the AI-engineering-base repository, trimmed to the stages this project needs. The rest of the base code is still in the repository but is not wired into the workflow.
 
-The repository is a seven-stage pipeline plus supporting modules. Each stage reads the previous stage's output and writes its own output and a manifest to a local directory or a `gs://` bucket, so runs can be inspected, repeated, or compared.
+## Status
 
-| Stage | Script | Purpose |
+Work in progress. The pipeline runs end to end, but the scores are not yet usable:
+
+- **Done:** ingestion from GCS, the Cloud Run Job and Workflow wiring, and the inference config that points at a Hugging Face model.
+- **Not yet built:**
+  - A prompt template, so the model is asked for a 0-10 score instead of continuing the text.
+  - Score parsing, so the model's reply becomes an integer clamped to 0-10 and records that don't parse are marked failed.
+  - Left padding for batched generation. Until this is fixed, `batch_size` is 1, which is correct but slow.
+
+Until the first two are done, `severity_score` holds raw model text. A successful run shows the pipeline works, not that the scores are meaningful.
+
+## Pipeline
+
+| Stage | Script | What it does |
 |---|---|---|
-| 1. Ingestion | `pipeline/sample.py` | Reads CSV, JSON, JSONL, or Parquet from a local path, `gs://`, or `bq://`. Keeps the original file and writes a canonical JSONL copy plus a manifest. |
-| 2. Preparation | `pipeline/preprocess.py` | Profiles the data and reports missing values, duplicates, type problems, and unexpected categories. It does not silently drop, impute, or coerce anything unless a config rule asks for it. |
-| 3. Anomaly detection | `pipeline/anomaly_detection.py` | Finds density-based outliers with Local Outlier Factor, optionally against a reference dataset that represents normal behavior. |
-| 4. Labeling | `pipeline/label.py` | Generates pseudo-labels with an expert model when ground truth is missing. Each label records its source and confidence so it stays distinct from ground truth. |
-| 5. Training | `pipeline/train.py` | Trains a configurable scikit-learn classifier or regressor, splits the data, handles numeric and categorical features, and saves the model with its preprocessing. |
-| 6. Inference | `pipeline/inference.py` | Runs a model over prepared data through a common interface. Optionally runs the multi-agent analysis in `agents.py` on the predictions. |
-| 7. Metrics | `pipeline/compute_metrics.py` | Computes classification or regression metrics from labeled records. It keeps ground-truth results separate from pseudo-label results. |
+| 1. Ingestion | `pipeline/sample.py` | Reads the CSV from `gs://` and writes `canonical.jsonl` plus a manifest. Every column is kept. |
+| 6. Inference | `pipeline/inference.py` | Runs the language model on each record's `description` and writes `predictions.jsonl`. Failed records are kept and marked, not dropped. |
 
-Supporting modules:
+The stage numbers match the base project, so output folders are `stage_1` and `stage_6`.
 
-- **`pipeline/common.py`**: shared read and write helpers. Local paths and `gs://` URIs behave the same way in every stage.
-- **`pipeline/rag.py`**: retrieval-augmented generation. It builds a vector index from BigQuery rows and GCS documents, embeds them with a BERT-family encoder, and retrieves relevant chunks to ground a language model's answers.
-- **`pipeline/agents.py`**: a LangChain supervisor that delegates to specialist agents. Each specialist can call only the read-only tools it is allowed. The agents write every model reply and tool call to a trace and cannot change source data or other stages' outputs.
-- **`pipeline/dashboard.py`**: a Streamlit dashboard for inspecting a run. It shows dataset characteristics, quality findings, metrics, anomalies, and individual records. It labels model-generated text as such.
-- **`pipeline/workflow.yaml`**: a Google Cloud Workflows definition that runs the stages in order as Cloud Run Jobs. Stages 4 (labeling) and 5 (training) can be turned on or off per run.
+The workflow (`pipeline/workflow.yaml`) runs the two stages in order as Cloud Run Jobs. Each run writes to `gs://<ARTIFACT_BUCKET>/runs/<RUN_ID>/`.
 
-## Design principles
+## Configuration
 
-- **Configuration, not code changes.** Domain-specific behavior lives in JSON files under `pipeline/config/`: labeling, training, inference, and metrics. Adding a dataset or model usually means editing config.
-- **Stages can be skipped or run alone.** `make run-<stage>` runs one stage. `RUN_LABELING` and `RUN_TRAINING` switch the optional stages on and off for a full run.
-- **Nothing is silently changed.** Stages preserve the original input, record their settings in manifests, and report problems instead of hiding them.
-- **Generated text and pseudo-labels are labeled.** Language-model output and model-generated labels stay distinct from verified results throughout the pipeline and the dashboard.
-- **Requirements are traceable.** `PRD.md` states the product requirements. `QRD.md` states the quality requirements, each with a test ID, and `tests/` maps every test to its QRD entry. `ERD.md` covers the data model.
+Settings live in `pipeline/config/`.
+
+- `inference_config.json` names the model and the input field:
+  - `model_path`: the Hugging Face model, currently `Qwen/Qwen2.5-1.5B-Instruct`.
+  - `text_field`: the column the model reads, currently `description`.
+  - `max_new_tokens`, `max_length`, `batch_size`: generation limits.
+  - `prediction_field`: where the output is written, currently `severity_score`.
+
+The configs are copied into the container image at build time. After changing one, rebuild and redeploy before running.
+
+## Running it
+
+Run these from the project root.
+
+```bash
+make test                      # offline test suite (some contract tests are expected to fail)
+make build push                # build the container image and push it to Artifact Registry
+make deploy-all deploy-workflow
+make run-workflow SOURCE_URI=gs://YOUR-BUCKET/path/to/data.csv RUN_ID=severity-001
+make executions                # list workflow runs
+make logs                      # show job logs
+```
+
+`SOURCE_URI` must point at a CSV with a `description` column. Each run writes to its own `RUN_ID` folder, so reruns don't overwrite earlier output.
+
+### Requirements
+
+You need an account with access to the project. Building the image needs `roles/serviceusage.serviceUsageConsumer`, `roles/cloudbuild.builds.editor`, and access to the Cloud Build source bucket. Pushing needs `roles/artifactregistry.writer`. Deploying needs `roles/run.admin`, `roles/workflows.editor`, and `roles/iam.serviceAccountUser`.
 
 ## Repository layout
 
 ```
-pipeline/            stage scripts, shared helpers, dashboard, workflow, Dockerfile
-pipeline/config/     JSON config for labeling, training, inference, and metrics
-tests/               pytest suite mapped to the QRD (see tests/README.md)
-smoke/               small sample dataset for an end-to-end check
-Makefile             setup, IAM, image build, Cloud Run deploys, workflow runs, monitoring
-PRD.md, QRD.md, ERD.md   requirements and data model
+pipeline/                   stage scripts, shared helpers, workflow, Dockerfile
+pipeline/config/            JSON config (inference, plus unused label and train configs)
+tests/                      pytest suite from the base project (see tests/README.md)
+smoke/                      small sample dataset
+Makefile                    build, deploy, and run targets
+PRD.md, QRD.md, ERD.md      requirements and data model from the base project
 ```
 
-## Getting started
+## Open questions
 
-### Run the tests
-
-The tests run offline. They use a bag-of-words encoder in place of BERT and a fake Ollama server in place of a real model, so they need no cloud access or model downloads.
-
-```bash
-python -m pytest tests -v
-# or
-make test
-```
-
-Tests that need live BigQuery are marked `requires_bigquery`. They run only when you set `RAG_TEST_TABLE`, `RAG_TEST_PREFIX`, and optionally `RAG_TEST_MODEL`. Details are in [tests/README.md](tests/README.md).
-
-### Run the dashboard locally
-
-```bash
-make dashboard-local
-```
-
-### Run the pipeline on Google Cloud
-
-The Makefile deploys the pipeline to Cloud Run Jobs and Workflows. The variables you are most likely to set are:
-
-| Variable | Meaning |
-|---|---|
-| `PROJECT_ID`, `REGION` | Google Cloud project and region |
-| `ARTIFACT_BUCKET` | Bucket where run outputs are written |
-| `SOURCE_URI` | Input data, such as `gs://bucket/input/data.csv` |
-| `RUN_ID` | Name for this run's output folder |
-| `RUN_LABELING`, `RUN_TRAINING` | Turn the optional stages on or off |
-
-A typical first-time sequence:
-
-```bash
-make setup                 # enable APIs and create the Artifact Registry repository
-make iam                   # grant the pipeline service account its roles
-make build push            # build and push the container image
-make deploy                # deploy the Cloud Run Jobs and the workflow
-make run-workflow SOURCE_URI=gs://bucket/input/data.csv RUN_ID=run-001
-```
-
-Run `make help` to see every target. Use `make status`, `make executions`, and `make logs` to monitor jobs.
-
-## Adapting it to a new project
-
-1. Put the new data in a file or table and set `SOURCE_URI`.
-2. Edit the JSON files in `pipeline/config/` to name the target field, the task (classification or regression), the features, and the metrics you need.
-3. Run the stages you need with `make run-<stage>`. Skip the ones you don't need.
-4. Add project-specific checks or tools in the stage scripts only where the config can't express them. The shared engine stays unchanged.
-
-## Status
-
-The core stages, the RAG and agent modules, the dashboard, and the test suite are in place, and the pipeline has run end to end on a sample input. Some requirements are still pending: BigQuery and GCS connectors beyond the current ones, Cloud Run failure and retry handling, IAM and retention checks, dashboard rendering tests, and some detectors and evaluators. Those tests are marked `@pending` in the suite, so they show as expected failures until the behavior exists. See the "Pending tests" section of [tests/README.md](tests/README.md) for the full list.
+- Which column in the source file has the ground-truth severity, if any? Without one, the scores can't be checked against known values.
+- The base project's test suite pins the seven-stage workflow. Those tests will fail until they're updated for this two-stage version.
