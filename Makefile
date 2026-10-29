@@ -232,13 +232,13 @@ deploy-workflow:
 		--project=$(PROJECT_ID) \
 		--service-account=$(SERVICE_ACCOUNT)
 
-deploy: deploy-all deploy-workflow
+deploy: build deploy-all deploy-workflow
 
 run-workflow:
 	gcloud workflows run $(WORKFLOW_NAME) \
 		--location=$(REGION) \
 		--project=$(PROJECT_ID) \
-		--data='{"project_id":"$(PROJECT_ID)","region":"$(REGION)","bucket":"$(ARTIFACT_BUCKET)","source_uri":"$(SOURCE_URI)","run_id":"$(RUN_ID)","run_labeling":$(RUN_LABELING),"run_training":$(RUN_TRAINING),"label_config":"$(LABEL_CONFIG)","train_config":"$(TRAIN_CONFIG)","inference_config":"$(INFERENCE_CONFIG)","metrics_config":"$(METRICS_CONFIG)"}'
+		--data='{"project_id":"$(PROJECT_ID)","region":"$(REGION)","bucket":"$(ARTIFACT_BUCKET)","source_uri":"$(SOURCE_URI)","run_id":"$(RUN_ID)","inference_config":"$(INFERENCE_CONFIG)"}'
 
 # ============================================================
 # Individual stage execution

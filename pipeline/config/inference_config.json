@@ -1,8 +1,16 @@
 {
-  "type": "sklearn",
-  "model_path": "gs://ai-engineering-512517-artifacts/models/smoke/model.joblib",
-  "feature_columns": ["age", "tenure_months", "monthly_spend", "support_tickets", "plan"],
-  "prediction_field": "prediction",
+  "adapter": {
+    "type": "huggingface",
+    "mode": "text_generation",
+    "model_path": "Qwen/Qwen2.5-1.5B-Instruct",
+    "text_field": "description",
+    "max_length": 1024,
+    "max_new_tokens": 8,
+    "do_sample": false,
+    "batch_size": 1
+  },
+  "batch_size": 1,
+  "prediction_field": "severity_score",
   "include_input_record": true,
   "continue_on_error": true
 }
