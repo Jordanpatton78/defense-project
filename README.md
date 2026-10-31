@@ -1,4 +1,4 @@
-# Tagup Defense Project
+# Defense Project
 
 Ranks the severity of risk descriptions on a 0-10 scale. A CSV in Google Cloud Storage goes in, and each row comes back with a `severity_score` produced by a small open-source language model reading that row's `description` column.
 
